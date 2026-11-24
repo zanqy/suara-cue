@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Suara — Cue Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./src/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><h1>Suara.</h1><span class="tag">CUE DESK</span></div>
+  <div class="status" id="status" role="status" aria-live="polite"><span class="dot"></span><span id="statusText">SIAP</span></div>
+  <div class="top-spacer"></div>
+  <div class="output"><span>OUTPUT</span><select id="output" aria-label="Output audio"><option>Default</option></select></div>
+  <div class="clock" id="clock">00:00:00</div>
+</header>
+<main>
+  <div class="sec-head">
+    <h2>Papan Lagu</h2>
+    <p>1–8 PILIH · ↑↓ VOLUME · X STOP · M MUTE · 0 DETIK = LANGSUNG</p>
+    <button class="add" id="addBtn">+ PILIH FILE</button>
+  </div>
+  <input type="file" id="fileInput" accept="audio/*" multiple hidden>
+  <div class="empty" id="empty"><span>Belum ada lagu.</span><button id="emptyAdd">PILIH FILE AUDIO</button><small>MP3 · M4A · OGG · FLAC · WAV</small></div>
+  <div class="grid" id="grid"></div>
+</main>
+<footer class="transport">
+  <div class="now">
+    <div class="lbl">ON AIR</div>
+    <div class="nm" id="nowTitle">— belum ada lagu —</div>
+    <div class="ar" id="nowArtist">pilih kartu untuk memulai</div>
+    <div class="meter"><span id="meterFill"></span></div>
+  </div>
+  <div class="ctl">
+    <button class="tbtn vol" id="btnVolDown" aria-label="Kurangi volume">
+      <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5ZM16 9l5 6M21 9l-5 6"/></svg>VOL − <kbd>↓</kbd>
+    </button>
+    <button class="tbtn vol" id="btnVolUp" aria-label="Tambah volume">
+      <svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4V5ZM16 9l5 6M16 15l5-6"/></svg>VOL + <kbd>↑</kbd>
+    </button>
+    <button class="tbtn stop" id="btnStop" aria-label="Stop">
+      <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>STOP <kbd>X</kbd>
+    </button>
+  </div>
+  <div class="master">
+    <button class="mute" id="btnMute" aria-pressed="false">MUTE SEMUA <kbd>M</kbd></button>
+    <div class="pct" id="pct">0%</div>
+  </div>
+</footer>
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>

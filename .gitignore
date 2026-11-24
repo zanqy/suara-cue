@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-electron/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.AppImage
+*.deb
+.DS_Store

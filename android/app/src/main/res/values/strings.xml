@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Suara Cue</string>
+    <string name="title_activity_main">Suara Cue</string>
+    <string name="package_name">com.za.sidqi.suara.cue</string>
+    <string name="custom_url_scheme">com.za.sidqi.suara.cue</string>
+</resources>
