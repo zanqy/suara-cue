@@ -80,7 +80,6 @@ function render(): void {
       </div>
       <div class="card-foot"><span class="card-state">SIAP</span>
         <button class="play" data-play="${i}"><span class="lab">PUTAR</span><kbd>${i + 1}</kbd></button>
-        <button class="pause" data-pause="${i}" title="Jeda / Lanjut" aria-label="Jeda atau lanjutkan lagu">JEDA</button>
         <button class="stop" data-stop="${i}" title="Stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
       </div><div class="level"><span></span></div>`;
     c.el = art;
@@ -94,14 +93,13 @@ function updateUI(): void {
     const on = i === active;
     c.el.classList.toggle('onair', on && level > 0);
     c.el.classList.toggle('silent', on && level <= 0);
-    c.el.querySelector('.lab')!.textContent = on ? (i === pausedCard ? 'DIJEDA' : 'SEDANG DIPUTAR') : 'PUTAR';
+    c.el.querySelector('.lab')!.textContent = on ? (i === pausedCard ? 'LANJUT' : 'SEDANG DIPUTAR') : 'PUTAR';
     c.el.querySelector('.card-state')!.textContent = on
       ? (i === pausedCard ? 'JEDA · ' + formatMs(c.audio.currentTime * 1000)
         : fading === 'out' ? 'HITUNG MUNDUR ' + fadeLeft.toFixed(1) + 's'
         : fading === 'in' ? 'FADE MASUK ' + fadeLeft.toFixed(1) + 's'
         : level <= 0 ? 'VOLUME 0%' : 'ON AIR')
       : 'SIAP';
-    c.el.querySelector('.pause')!.textContent = on && i === pausedCard ? 'LANJUT' : 'JEDA';
     (c.el.querySelector('.level span') as HTMLElement).style.width = (on ? level : 0) + '%';
     setSlider(c, on ? level : c.vol);
   });
@@ -144,37 +142,34 @@ function play(i: number): void {
   if (i < 0 || i >= cards.length) return;
   cancelRaf();
   if (active >= 0 && active !== i) {const prev = cards[active]; prev.audio.pause(); prev.audio.currentTime = 0; setLevel(prev.audio, 0);}
-  pausedCard = -1; active = i; fading = null; fadeLeft = 0;
+  const resume = pausedCard === i;
+  active = i; fading = null; fadeLeft = 0;
   const c = cards[i];
-  c.audio.currentTime = 0;
+  if (!resume) c.audio.currentTime = 0;
+  pausedCard = -1;
   void audioContext().resume();
   void c.audio.play().catch(() => { /* blocked until user gesture */ });
   const fin = numSec(c.fin);
   if (fin > 0) {level = 0; fading = 'in'; applyLevel(); updateUI(); ramp(c.vol, fin, () => {fading = null; fadeLeft = 0; updateUI();});}
   else {level = c.vol; applyLevel(); updateUI();}
 }
+function pauseHere(): void {
+  cancelRaf();
+  if (active < 0) return;
+  const c = cards[active];
+  c.audio.pause();
+  setLevel(c.audio, 0);
+  level = 0; fading = null; fadeLeft = 0; pausedCard = active;
+  c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
+  updateUI();
+}
 function stop(): void {
   if (active < 0) return;
-  if (fading) {finishStop(); return;}
+  if (pausedCard === active) {finishStop(); return;}
+  if (fading) {pauseHere(); return;}
   const fout = numSec(cards[active].fout);
-  if (fout > 0) {fading = 'out'; ramp(0, fout, finishStop);}
-  else finishStop();
-}
-function togglePause(i: number): void {
-  if (i < 0 || i >= cards.length || active !== i) return;
-  const c = cards[i];
-  if (pausedCard === i) {
-    pausedCard = -1;
-    void c.audio.play().catch(() => {});
-    level = c.vol; fading = null; fadeLeft = 0; applyLevel();
-  } else {
-    cancelRaf();
-    c.audio.pause();
-    setLevel(c.audio, 0);
-    level = 0; fading = null; fadeLeft = 0; pausedCard = i;
-    c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
-  }
-  updateUI();
+  if (fout > 0) {fading = 'out'; ramp(0, fout, pauseHere);}
+  else pauseHere();
 }
 function seekTo(i: number, clientX: number): void {
   const c = cards[i];
@@ -255,7 +250,6 @@ grid.addEventListener('click', e => {
   if (Number.isNaN(i)) return;
   if (t.closest('.seek')) return;
   if (t.closest('[data-play]')) play(i);
-  else if (t.closest('[data-pause]')) togglePause(i);
   else if (t.closest('[data-stop]') && i === active) stop();
   else if (t.closest('[data-move-left]')) move(i, -1);
   else if (t.closest('[data-move-right]')) move(i, 1);
@@ -331,7 +325,7 @@ window.addEventListener('pagehide', () => {if (active >= 0) persist(cards[active
 setInterval(() => {$('clock').textContent = new Date().toLocaleTimeString('id-ID', {hour12: false});}, 1000);
 setInterval(() => {
   const now = Date.now();
-  if (active >= 0 && level > 0 && !muted) {
+  if (active >= 0 && pausedCard < 0 && level > 0 && !muted) {
     const c = cards[active];
     c.playedMs = (c.playedMs || 0) + (now - lastTick);
     c.el.querySelector('.played')!.textContent = formatMs(c.playedMs);
