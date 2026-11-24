@@ -12,7 +12,7 @@ const output = $<HTMLSelectElement>('output'), muteBtn = $<HTMLButtonElement>('b
 const fileInput = $<HTMLInputElement>('fileInput'), folderInput = $<HTMLInputElement>('folderInput');
 
 let cards: Runtime[] = [];
-let active = -1, level = 0, muted = false, raf = 0;
+let active = -1, level = 0, muted = false, raf = 0, pausedCard = -1, dragSeek: number | null = null;
 let fading: 'out' | 'in' | null = null, fadeLeft = 0;
 let lastTick = Date.now(), lastSave = 0;
 
@@ -80,6 +80,7 @@ function render(): void {
       </div>
       <div class="card-foot"><span class="card-state">SIAP</span>
         <button class="play" data-play="${i}"><span class="lab">PUTAR</span><kbd>${i + 1}</kbd></button>
+        <button class="pause" data-pause="${i}" title="Jeda / Lanjut" aria-label="Jeda atau lanjutkan lagu">JEDA</button>
         <button class="stop" data-stop="${i}" title="Stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
       </div><div class="level"><span></span></div>`;
     c.el = art;
@@ -93,12 +94,14 @@ function updateUI(): void {
     const on = i === active;
     c.el.classList.toggle('onair', on && level > 0);
     c.el.classList.toggle('silent', on && level <= 0);
-    c.el.querySelector('.lab')!.textContent = on ? 'SEDANG DIPUTAR' : 'PUTAR';
+    c.el.querySelector('.lab')!.textContent = on ? (i === pausedCard ? 'DIJEDA' : 'SEDANG DIPUTAR') : 'PUTAR';
     c.el.querySelector('.card-state')!.textContent = on
-      ? (fading === 'out' ? 'HITUNG MUNDUR ' + fadeLeft.toFixed(1) + 's'
+      ? (i === pausedCard ? 'JEDA · ' + formatMs(c.audio.currentTime * 1000)
+        : fading === 'out' ? 'HITUNG MUNDUR ' + fadeLeft.toFixed(1) + 's'
         : fading === 'in' ? 'FADE MASUK ' + fadeLeft.toFixed(1) + 's'
         : level <= 0 ? 'VOLUME 0%' : 'ON AIR')
       : 'SIAP';
+    c.el.querySelector('.pause')!.textContent = on && i === pausedCard ? 'LANJUT' : 'JEDA';
     (c.el.querySelector('.level span') as HTMLElement).style.width = (on ? level : 0) + '%';
     setSlider(c, on ? level : c.vol);
   });
@@ -111,9 +114,9 @@ function updateUI(): void {
     : 'pilih kartu untuk memulai';
   meterFill.style.width = (muted ? 0 : level) + '%';
   pct.textContent = Math.round(muted ? 0 : level) + '%';
-  const s = {muted, active: active >= 0, fading, level, left: fadeLeft, src: 'MUSIC', volume: level};
-  statusText.textContent = stateText(s);
-  statusEl.className = 'status' + (muted ? ' muted' : !s.active ? '' : fading || level <= 0 ? ' spot' : ' live');
+  const s = {muted, active: active >= 0 && pausedCard < 0, fading, level, left: fadeLeft, src: 'MUSIC', volume: level};
+  statusText.textContent = pausedCard >= 0 && !muted ? 'JEDA · ' + formatMs(cards[pausedCard].audio.currentTime * 1000) : stateText(s);
+  statusEl.className = 'status' + (muted ? ' muted' : pausedCard >= 0 ? ' spot' : !s.active ? '' : fading || level <= 0 ? ' spot' : ' live');
   muteBtn.classList.toggle('on', muted);
   muteBtn.setAttribute('aria-pressed', String(muted));
 }
@@ -134,14 +137,14 @@ function ramp(to: number, secs: number, done: () => void): void {
 function finishStop(): void {
   cancelRaf();
   if (active >= 0) {const c = cards[active]; c.audio.pause(); c.audio.currentTime = 0; setLevel(c.audio, 0); persist(c);}
-  active = -1; level = 0; fading = null; fadeLeft = 0;
+  active = -1; level = 0; fading = null; fadeLeft = 0; pausedCard = -1;
   updateUI();
 }
 function play(i: number): void {
   if (i < 0 || i >= cards.length) return;
   cancelRaf();
   if (active >= 0 && active !== i) {const prev = cards[active]; prev.audio.pause(); prev.audio.currentTime = 0; setLevel(prev.audio, 0);}
-  active = i; fading = null; fadeLeft = 0;
+  pausedCard = -1; active = i; fading = null; fadeLeft = 0;
   const c = cards[i];
   c.audio.currentTime = 0;
   void audioContext().resume();
@@ -156,6 +159,34 @@ function stop(): void {
   const fout = numSec(cards[active].fout);
   if (fout > 0) {fading = 'out'; ramp(0, fout, finishStop);}
   else finishStop();
+}
+function togglePause(i: number): void {
+  if (i < 0 || i >= cards.length || active !== i) return;
+  const c = cards[i];
+  if (pausedCard === i) {
+    pausedCard = -1;
+    void c.audio.play().catch(() => {});
+    level = c.vol; fading = null; fadeLeft = 0; applyLevel();
+  } else {
+    cancelRaf();
+    c.audio.pause();
+    setLevel(c.audio, 0);
+    level = 0; fading = null; fadeLeft = 0; pausedCard = i;
+    c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
+  }
+  updateUI();
+}
+function seekTo(i: number, clientX: number): void {
+  const c = cards[i];
+  if (!c || c.durationMs <= 0) return;
+  const bar = c.el.querySelector('.seek') as HTMLElement;
+  if (!bar) return;
+  const r = bar.getBoundingClientRect();
+  if (r.width <= 0) return;
+  c.audio.currentTime = Math.max(0, Math.min(1, (clientX - r.left) / r.width)) * c.durationMs / 1000;
+  bar.querySelector<HTMLElement>('.seek-fill')!.style.width = (c.audio.currentTime * 1000 / c.durationMs * 100) + '%';
+  c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
+  if (i === pausedCard) c.el.querySelector('.card-state')!.textContent = 'JEDA · ' + formatMs(c.audio.currentTime * 1000);
 }
 function stepVolume(d: number): void {
   if (active < 0) return;
@@ -222,23 +253,31 @@ grid.addEventListener('click', e => {
   const t = e.target as HTMLElement;
   const i = Number((t.closest('.card') as HTMLElement)?.dataset.i);
   if (Number.isNaN(i)) return;
-  if (t.closest('.seek')) {
-    const bar = t.closest('.seek') as HTMLElement;
-    const c = cards[i];
-    if (c && c.durationMs > 0) {
-      const r = bar.getBoundingClientRect();
-      c.audio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * c.durationMs / 1000;
-      bar.querySelector<HTMLElement>('.seek-fill')!.style.width = (c.audio.currentTime * 1000 / c.durationMs * 100) + '%';
-      c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
-    }
-    return;
-  }
+  if (t.closest('.seek')) return;
   if (t.closest('[data-play]')) play(i);
+  else if (t.closest('[data-pause]')) togglePause(i);
   else if (t.closest('[data-stop]') && i === active) stop();
   else if (t.closest('[data-move-left]')) move(i, -1);
   else if (t.closest('[data-move-right]')) move(i, 1);
   else if (t.closest('[data-remove]')) void removeCard(i);
 });
+grid.addEventListener('pointerdown', e => {
+  const bar = (e.target as HTMLElement).closest('.seek') as HTMLElement;
+  if (!bar) return;
+  const i = Number((bar.closest('.card') as HTMLElement).dataset.i);
+  dragSeek = i;
+  try {bar.setPointerCapture(e.pointerId);} catch { /* older WebView */ }
+  seekTo(i, e.clientX);
+  e.preventDefault();
+});
+grid.addEventListener('pointermove', e => {if (dragSeek !== null) seekTo(dragSeek, e.clientX);});
+grid.addEventListener('pointerup', e => {
+  if (dragSeek === null) return;
+  const bar = (e.target as HTMLElement).closest('.seek') as HTMLElement;
+  try {if (bar?.hasPointerCapture(e.pointerId)) bar.releasePointerCapture(e.pointerId);} catch { /* ignore */ }
+  dragSeek = null;
+});
+grid.addEventListener('pointercancel', () => {dragSeek = null;});
 grid.addEventListener('input', e => {
   const t = e.target as HTMLInputElement;
   const cardEl = t.closest('.card') as HTMLElement;
