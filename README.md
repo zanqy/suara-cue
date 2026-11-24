@@ -17,7 +17,7 @@ npm run dev
 ```bash
 npm run dist:linux
 ```
-Hasil: `dist-electron/*.AppImage`, `*.deb`.
+Hasil: `dist-electron/*.tar.gz` (atau `dist/*.tar.gz` pada build lama).
 
 ## Build Android
 ```bash
