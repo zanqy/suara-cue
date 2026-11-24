@@ -5,6 +5,7 @@ export interface StoredCard {
   vol: number;
   fout: number;
   fin: number;
+  playedMs?: number;
 }
 
 const DB_NAME = 'suara-cue';

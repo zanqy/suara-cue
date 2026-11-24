@@ -22,8 +22,10 @@
     <h2>Papan Lagu</h2>
     <p>1–8 PILIH · ↑↓ VOLUME · X STOP · M MUTE · 0 DETIK = LANGSUNG</p>
     <button class="add" id="addBtn">+ PILIH FILE</button>
+    <button class="add" id="folderBtn">+ FOLDER</button>
   </div>
   <input type="file" id="fileInput" accept="audio/*" multiple hidden>
+  <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
   <div class="empty" id="empty"><span>Belum ada lagu.</span><button id="emptyAdd">PILIH FILE AUDIO</button><small>MP3 · M4A · OGG · FLAC · WAV</small></div>
   <div class="grid" id="grid"></div>
 </main>

@@ -3,17 +3,18 @@ import {loadCards, putCard, deleteCard, type StoredCard} from './store.ts';
 import {setLevel, listDevices, selectDevice, audioContext} from './audio.ts';
 
 interface Runtime extends StoredCard {url: string; audio: HTMLAudioElement; el: HTMLElement;}
-declare global {interface Window {electronAPI?: {openFiles: () => Promise<{name: string; base64: string}[]>}}}
+declare global {interface Window {electronAPI?: {openFiles: () => Promise<{name: string; base64: string}[]>; openFolder: () => Promise<{name: string; base64: string}[]>}}}
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const grid = $('grid'), empty = $('empty'), statusEl = $('status'), statusText = $('statusText');
 const nowTitle = $('nowTitle'), nowArtist = $('nowArtist'), meterFill = $('meterFill'), pct = $('pct');
 const output = $<HTMLSelectElement>('output'), muteBtn = $<HTMLButtonElement>('btnMute');
-const fileInput = $<HTMLInputElement>('fileInput');
+const fileInput = $<HTMLInputElement>('fileInput'), folderInput = $<HTMLInputElement>('folderInput');
 
 let cards: Runtime[] = [];
 let active = -1, level = 0, muted = false, raf = 0;
 let fading: 'out' | 'in' | null = null, fadeLeft = 0;
+let lastTick = Date.now(), lastSave = 0;
 
 function seedOf(id: string): number {
   let h = 0;
@@ -33,7 +34,14 @@ function setSlider(c: Runtime, v: number): void {
   c.el.querySelector('.volNum')!.textContent = val + '%';
 }
 function persist(c: Runtime): void {
-  void putCard({id: c.id, name: c.name, blob: c.blob, vol: c.vol, fout: c.fout, fin: c.fin}).catch(() => {});
+  void putCard({id: c.id, name: c.name, blob: c.blob, vol: c.vol, fout: c.fout, fin: c.fin, playedMs: c.playedMs || 0}).catch(() => {});
+}
+function formatMs(ms: number): string {
+  const s = Math.floor(Math.max(0, ms) / 1000);
+  return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+function saveOrder(): void {
+  localStorage.setItem('suara-cue-order', JSON.stringify(cards.map(c => c.id)));
 }
 function applyLevel(): void {
   if (active >= 0) setLevel(cards[active].audio, muted ? 0 : level);
@@ -41,6 +49,12 @@ function applyLevel(): void {
 function cancelRaf(): void {if (raf) cancelAnimationFrame(raf); raf = 0;}
 
 function render(): void {
+  const order: string[] = JSON.parse(localStorage.getItem('suara-cue-order') || '[]');
+  cards.sort((a, b) => {
+    const ia = order.indexOf(a.id), ib = order.indexOf(b.id);
+    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+  });
+  saveOrder();
   grid.innerHTML = '';
   empty.style.display = cards.length ? 'none' : 'flex';
   cards.forEach((c, i) => {
@@ -51,10 +65,12 @@ function render(): void {
       <div class="card-top"><span class="num">${String(i + 1).padStart(2, '0')}</span>
         <span class="badge">${c.name.toLowerCase().endsWith('.wav') ? 'WAV' : 'AUDIO'}</span>
         <span class="dur">--:--</span>
+        <button class="mv" data-move-left="${i}" aria-label="Geser kiri" title="Geser kiri">‹</button><button class="mv" data-move-right="${i}" aria-label="Geser kanan" title="Geser kanan">›</button>
         <button class="x" data-remove="${i}" aria-label="Hapus Kartu" title="Hapus">×</button></div>
       <div class="title" title="${c.name.replace(/"/g, '&quot;')}">${c.name.replace(/\.[^.]+$/, '')}</div>
       <div class="artist">${c.name}</div>
       <div class="wave" aria-hidden="true">${bars(seedOf(c.id))}</div>
+      <div class="time-row"><span>POS <b class="pos">00:00</b></span><span>TOTAL DIPUTAR <b class="played">${formatMs(c.playedMs || 0)}</b></span></div>
       <div class="volhead"><span>VOLUME KARTU</span><b class="volNum">${c.vol}%</b></div>
       <div class="vrange"><input type="range" data-vol min="0" max="100" step="1" value="${c.vol}" aria-label="Volume ${c.name}"></div>
       <div class="fade-set">
@@ -116,7 +132,7 @@ function ramp(to: number, secs: number, done: () => void): void {
 }
 function finishStop(): void {
   cancelRaf();
-  if (active >= 0) {const c = cards[active]; c.audio.pause(); c.audio.currentTime = 0; setLevel(c.audio, 0);}
+  if (active >= 0) {const c = cards[active]; c.audio.pause(); c.audio.currentTime = 0; setLevel(c.audio, 0); persist(c);}
   active = -1; level = 0; fading = null; fadeLeft = 0;
   updateUI();
 }
@@ -154,12 +170,21 @@ function makeRuntime(s: StoredCard): Runtime {
   audio.preload = 'metadata';
   return {...s, url, audio, el: document.createElement('article')};
 }
+const AUDIO_RE = /\.(mp3|m4a|aac|ogg|opus|flac|wav)$/i;
 async function addFiles(files: File[]): Promise<void> {
-  for (const f of files) {
+  for (const f of files.filter(f => AUDIO_RE.test(f.name) || f.type.startsWith('audio/'))) {
     const s: StoredCard = {id: crypto.randomUUID(), name: f.name, blob: f, vol: 80, fout: 3, fin: 0};
     cards.push(makeRuntime(s));
     await putCard(s);
   }
+  render();
+}
+function move(i: number, dir: number): void {
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= cards.length) return;
+  if (active >= 0) finishStop();
+  [cards[i], cards[j]] = [cards[j], cards[i]];
+  saveOrder();
   render();
 }
 async function removeCard(i: number): Promise<void> {
@@ -190,6 +215,8 @@ grid.addEventListener('click', e => {
   if (Number.isNaN(i)) return;
   if (t.closest('[data-play]')) play(i);
   else if (t.closest('[data-stop]') && i === active) stop();
+  else if (t.closest('[data-move-left]')) move(i, -1);
+  else if (t.closest('[data-move-right]')) move(i, 1);
   else if (t.closest('[data-remove]')) void removeCard(i);
 });
 grid.addEventListener('input', e => {
@@ -214,6 +241,17 @@ $('addBtn').addEventListener('click', async () => {
 });
 $('emptyAdd').addEventListener('click', () => $('addBtn').click());
 fileInput.addEventListener('change', () => {void addFiles([...fileInput.files!]); fileInput.value = '';});
+$('folderBtn').addEventListener('click', async () => {
+  if (window.electronAPI?.openFolder) {
+    const picked = await window.electronAPI.openFolder();
+    await addFiles(picked.map(p => new File([Uint8Array.from(atob(p.base64), ch => ch.charCodeAt(0))], p.name, {type: 'audio/*'})));
+  } else if ('webkitdirectory' in folderInput) folderInput.click();
+  else $('addBtn').click();
+});
+folderInput.addEventListener('change', () => {
+  void addFiles([...folderInput.files!].sort((a, b) => a.webkitRelativePath.localeCompare(b.webkitRelativePath)));
+  folderInput.value = '';
+});
 output.addEventListener('change', () => {
   localStorage.setItem('suara-cue-device', output.value);
   cards.forEach(c => void selectDevice(c.audio, output.value));
@@ -230,7 +268,19 @@ document.addEventListener('keydown', e => {
   else if (e.key.toLowerCase() === 'x') stop();
   else if (e.key.toLowerCase() === 'm') {muted = !muted; applyLevel(); updateUI();}
 });
+window.addEventListener('pagehide', () => {if (active >= 0) persist(cards[active]);});
 setInterval(() => {$('clock').textContent = new Date().toLocaleTimeString('id-ID', {hour12: false});}, 1000);
+setInterval(() => {
+  const now = Date.now();
+  if (active >= 0 && level > 0 && !muted) {
+    const c = cards[active];
+    c.playedMs = (c.playedMs || 0) + (now - lastTick);
+    c.el.querySelector('.played')!.textContent = formatMs(c.playedMs);
+    if (now - lastSave > 5000) {persist(c); lastSave = now;}
+    if (!c.audio.paused) c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
+  }
+  lastTick = now;
+}, 250);
 void (async () => {
   const stored = await loadCards();
   cards = stored.map(makeRuntime);

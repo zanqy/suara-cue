@@ -15,3 +15,19 @@ ipcMain.handle('open-files', async () => {
   if (r.canceled) return [];
   return Promise.all(r.filePaths.map(async p => ({name: path.basename(p), base64: (await fs.readFile(p)).toString('base64')})));
 });
+const AUDIO_EXT = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.opus', '.flac', '.wav']);
+async function walk(dir, out) {
+  for (const entry of await fs.readdir(dir, {withFileTypes: true})) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) await walk(full, out);
+    else if (AUDIO_EXT.has(path.extname(entry.name).toLowerCase())) out.push(full);
+  }
+}
+ipcMain.handle('open-folder', async () => {
+  const r = await dialog.showOpenDialog(win, {properties: ['openDirectory']});
+  if (r.canceled || !r.filePaths.length) return [];
+  const paths = [];
+  await walk(r.filePaths[0], paths);
+  paths.sort((a, b) => a.localeCompare(b));
+  return Promise.all(paths.map(async p => ({name: path.basename(p), base64: (await fs.readFile(p)).toString('base64')})));
+});
