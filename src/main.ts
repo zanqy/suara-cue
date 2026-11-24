@@ -2,7 +2,7 @@ import {numSec, fadeLevel, stateText} from './logic.ts';
 import {loadCards, putCard, deleteCard, type StoredCard} from './store.ts';
 import {setLevel, listDevices, selectDevice, audioContext} from './audio.ts';
 
-interface Runtime extends StoredCard {url: string; audio: HTMLAudioElement; el: HTMLElement;}
+interface Runtime extends StoredCard {url: string; audio: HTMLAudioElement; el: HTMLElement; durationMs: number;}
 declare global {interface Window {electronAPI?: {openFiles: () => Promise<{name: string; base64: string}[]>; openFolder: () => Promise<{name: string; base64: string}[]>}}}
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -64,13 +64,14 @@ function render(): void {
     art.innerHTML = `
       <div class="card-top"><span class="num">${String(i + 1).padStart(2, '0')}</span>
         <span class="badge">${c.name.toLowerCase().endsWith('.wav') ? 'WAV' : 'AUDIO'}</span>
-        <span class="dur">--:--</span>
+        <span class="dur">${c.durationMs ? formatMs(c.durationMs) : '--:--'}</span>
         <button class="mv" data-move-left="${i}" aria-label="Geser kiri" title="Geser kiri">‹</button><button class="mv" data-move-right="${i}" aria-label="Geser kanan" title="Geser kanan">›</button>
         <button class="x" data-remove="${i}" aria-label="Hapus Kartu" title="Hapus">×</button></div>
       <div class="title" title="${c.name.replace(/"/g, '&quot;')}">${c.name.replace(/\.[^.]+$/, '')}</div>
       <div class="artist">${c.name}</div>
       <div class="wave" aria-hidden="true">${bars(seedOf(c.id))}</div>
-      <div class="time-row"><span>POS <b class="pos">00:00</b></span><span>TOTAL DIPUTAR <b class="played">${formatMs(c.playedMs || 0)}</b></span></div>
+      <div class="time-row"><span>POS <b class="pos">00:00</b> / <b class="total">${c.durationMs ? formatMs(c.durationMs) : '--:--'}</b></span><span>TOTAL DIPUTAR <b class="played">${formatMs(c.playedMs || 0)}</b></span></div>
+      <div class="seek" data-seek="${i}" role="slider" aria-label="Posisi lagu ${c.name}"><div class="seek-fill"></div></div>
       <div class="volhead"><span>VOLUME KARTU</span><b class="volNum">${c.vol}%</b></div>
       <div class="vrange"><input type="range" data-vol min="0" max="100" step="1" value="${c.vol}" aria-label="Volume ${c.name}"></div>
       <div class="fade-set">
@@ -168,7 +169,15 @@ function makeRuntime(s: StoredCard): Runtime {
   const url = URL.createObjectURL(s.blob);
   const audio = new Audio(url);
   audio.preload = 'metadata';
-  return {...s, url, audio, el: document.createElement('article')};
+  const c: Runtime = {...s, url, audio, el: document.createElement('article'), durationMs: 0};
+  audio.addEventListener('loadedmetadata', () => {
+    if (Number.isFinite(audio.duration)) {
+      c.durationMs = audio.duration * 1000;
+      c.el.querySelector('.dur')!.textContent = formatMs(c.durationMs);
+      c.el.querySelector('.total')!.textContent = formatMs(c.durationMs);
+    }
+  });
+  return c;
 }
 const AUDIO_RE = /\.(mp3|m4a|aac|ogg|opus|flac|wav)$/i;
 async function addFiles(files: File[]): Promise<void> {
@@ -213,6 +222,17 @@ grid.addEventListener('click', e => {
   const t = e.target as HTMLElement;
   const i = Number((t.closest('.card') as HTMLElement)?.dataset.i);
   if (Number.isNaN(i)) return;
+  if (t.closest('.seek')) {
+    const bar = t.closest('.seek') as HTMLElement;
+    const c = cards[i];
+    if (c && c.durationMs > 0) {
+      const r = bar.getBoundingClientRect();
+      c.audio.currentTime = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * c.durationMs / 1000;
+      bar.querySelector<HTMLElement>('.seek-fill')!.style.width = (c.audio.currentTime * 1000 / c.durationMs * 100) + '%';
+      c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
+    }
+    return;
+  }
   if (t.closest('[data-play]')) play(i);
   else if (t.closest('[data-stop]') && i === active) stop();
   else if (t.closest('[data-move-left]')) move(i, -1);
@@ -277,7 +297,9 @@ setInterval(() => {
     c.playedMs = (c.playedMs || 0) + (now - lastTick);
     c.el.querySelector('.played')!.textContent = formatMs(c.playedMs);
     if (now - lastSave > 5000) {persist(c); lastSave = now;}
-    if (!c.audio.paused) c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
+    c.el.querySelector('.pos')!.textContent = formatMs(c.audio.currentTime * 1000);
+    const fill = c.el.querySelector<HTMLElement>('.seek-fill')!;
+    fill.style.width = (c.durationMs > 0 ? Math.min(100, c.audio.currentTime * 1000 / c.durationMs * 100) : 0) + '%';
   }
   lastTick = now;
 }, 250);
