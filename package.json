@@ -16,6 +16,7 @@
     "cap:sync": "npm run build && npx cap sync android"
   },
   "build": {
+    "directories": {"output": "dist-electron"},
     "appId": "com.za.sidqi.suara.cue",
     "productName": "Suara Cue",
     "files": [
