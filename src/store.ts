@@ -7,6 +7,7 @@ export interface StoredCard {
   fin: number;
   playedMs?: number;
   paletteId?: string;
+  loop?: boolean;
 }
 
 const DB_NAME = 'suara-cue';

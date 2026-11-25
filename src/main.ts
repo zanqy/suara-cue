@@ -37,7 +37,7 @@ function setSlider(c: Runtime, v: number): void {
   c.el.querySelector('.volNum')!.textContent = val + '%';
 }
 function persist(c: Runtime): void {
-  void putCard({id: c.id, name: c.name, blob: c.blob, vol: c.vol, fout: c.fout, fin: c.fin, playedMs: c.playedMs || 0, paletteId: c.paletteId}).catch(() => {});
+  void putCard({id: c.id, name: c.name, blob: c.blob, vol: c.vol, fout: c.fout, fin: c.fin, playedMs: c.playedMs || 0, paletteId: c.paletteId, loop: !!c.loop}).catch(() => {});
 }
 function formatMs(ms: number): string {
   const s = Math.floor(Math.max(0, ms) / 1000);
@@ -111,7 +111,6 @@ function render(): void {
       </div></div>
       <div class="card-foot"><span class="card-state">SIAP</span>
         <button class="play" data-play="${i}"><span class="lab">PUTAR</span><kbd>${vi + 1}</kbd></button>
-        <button class="stop" data-stop="${i}" title="Stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
       </div><div class="level"><span></span></div>`;
     c.el = art;
     grid.appendChild(art);
@@ -125,12 +124,12 @@ function updateUI(): void {
     const on = i === active;
     c.el.classList.toggle('onair', on && level > 0);
     c.el.classList.toggle('silent', on && level <= 0);
-    c.el.querySelector('.lab')!.textContent = on ? (i === pausedCard ? 'LANJUT' : 'SEDANG DIPUTAR') : 'PUTAR';
+    c.el.querySelector('.lab')!.textContent = on ? (i === pausedCard ? 'LANJUT' : 'JEDA') : 'PUTAR';
     c.el.querySelector('.card-state')!.textContent = on
       ? (i === pausedCard ? 'JEDA · ' + formatMs(c.audio.currentTime * 1000)
         : fading === 'out' ? 'HITUNG MUNDUR ' + fadeLeft.toFixed(1) + 's'
         : fading === 'in' ? 'FADE MASUK ' + fadeLeft.toFixed(1) + 's'
-        : level <= 0 ? 'VOLUME 0%' : 'ON AIR')
+        : level <= 0 ? 'VOLUME 0%' : c.loop ? 'ON AIR ↻' : 'ON AIR')
       : 'SIAP';
     (c.el.querySelector('.level span') as HTMLElement).style.width = (on ? level : 0) + '%';
     setSlider(c, on ? level : c.vol);
@@ -149,6 +148,10 @@ function updateUI(): void {
   statusEl.className = 'status' + (muted ? ' muted' : pausedCard >= 0 ? ' spot' : !s.active ? '' : fading || level <= 0 ? ' spot' : ' live');
   muteBtn.classList.toggle('on', muted);
   muteBtn.setAttribute('aria-pressed', String(muted));
+  const loopBtn = $<HTMLButtonElement>('btnLoop');
+  const looping = active >= 0 && !!cards[active].loop;
+  loopBtn.classList.toggle('on', looping);
+  loopBtn.setAttribute('aria-pressed', String(looping));
 }
 
 function ramp(to: number, secs: number, done: () => void): void {
@@ -197,7 +200,7 @@ function pauseHere(): void {
 }
 function stop(): void {
   if (active < 0) return;
-  if (pausedCard === active) {finishStop(); return;}
+  if (pausedCard === active) {play(active); return;}
   if (fading) {pauseHere(); return;}
   const fout = numSec(cards[active].fout);
   if (fout > 0) {fading = 'out'; ramp(0, fout, pauseHere);}
@@ -234,6 +237,15 @@ function makeRuntime(s: StoredCard): Runtime {
       c.el.querySelector('.dur')!.textContent = formatMs(c.durationMs);
       c.el.querySelector('.total')!.textContent = formatMs(c.durationMs);
     }
+  });
+  audio.addEventListener('ended', () => {
+    if (cards[active] !== c) return;
+    if (!c.loop) {finishStop(); return;}
+    c.audio.currentTime = 0;
+    void c.audio.play().catch(() => {});
+    const fin = numSec(c.fin);
+    if (fin > 0) {level = 0; fading = 'in'; ramp(c.vol, fin, () => {fading = null; fadeLeft = 0; updateUI();});}
+    else {level = c.vol; updateUI();}
   });
   return c;
 }
@@ -283,8 +295,7 @@ grid.addEventListener('click', e => {
   const i = Number((t.closest('.card') as HTMLElement)?.dataset.i);
   if (Number.isNaN(i)) return;
   if (t.closest('.seek')) return;
-  if (t.closest('[data-play]')) play(i);
-  else if (t.closest('[data-stop]') && i === active) stop();
+  if (t.closest('[data-play]')) {if (i === active) stop(); else play(i);}
   else if (t.closest('[data-move-left]')) move(i, -1);
   else if (t.closest('[data-move-right]')) move(i, 1);
   else if (t.closest('[data-remove]')) void removeCard(i);
@@ -352,7 +363,12 @@ output.addEventListener('change', () => {
 });
 $('btnVolDown').addEventListener('click', () => stepVolume(-5));
 $('btnVolUp').addEventListener('click', () => stepVolume(5));
-$('btnStop').addEventListener('click', stop);
+function toggleLoop(): void {
+  if (active < 0) return;
+  const c = cards[active];
+  c.loop = !c.loop; persist(c); updateUI();
+}
+$('btnLoop').addEventListener('click', toggleLoop);
 muteBtn.addEventListener('click', () => {muted = !muted; applyLevel(); updateUI();});
 document.addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
@@ -360,6 +376,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'ArrowDown') stepVolume(-5);
   else if (e.key === 'ArrowUp') stepVolume(5);
   else if (e.key.toLowerCase() === 'x') stop();
+  else if (e.key.toLowerCase() === 'l') toggleLoop();
   else if (e.key.toLowerCase() === 'm') {muted = !muted; applyLevel(); updateUI();}
 });
 window.addEventListener('pagehide', () => {if (active >= 0) persist(cards[active]);});
