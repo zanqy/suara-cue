@@ -25,9 +25,9 @@ async function walk(dir, out) {
 }
 ipcMain.handle('open-folder', async () => {
   const r = await dialog.showOpenDialog(win, {properties: ['openDirectory']});
-  if (r.canceled || !r.filePaths.length) return [];
+  if (r.canceled || !r.filePaths.length) return {folder:'', files:[]};
   const paths = [];
   await walk(r.filePaths[0], paths);
   paths.sort((a, b) => a.localeCompare(b));
-  return Promise.all(paths.map(async p => ({name: path.basename(p), base64: (await fs.readFile(p)).toString('base64')})));
+  return {folder: path.basename(r.filePaths[0]), files: await Promise.all(paths.map(async p => ({name: path.basename(p), base64: (await fs.readFile(p)).toString('base64')})))};
 });

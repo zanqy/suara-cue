@@ -3,13 +3,16 @@ import {loadCards, putCard, deleteCard, type StoredCard} from './store.ts';
 import {setLevel, listDevices, selectDevice, audioContext} from './audio.ts';
 
 interface Runtime extends StoredCard {url: string; audio: HTMLAudioElement; el: HTMLElement; durationMs: number;}
-declare global {interface Window {electronAPI?: {openFiles: () => Promise<{name: string; base64: string}[]>; openFolder: () => Promise<{name: string; base64: string}[]>}}}
+declare global {interface Window {electronAPI?: {openFiles: () => Promise<{name: string; base64: string}[]>; openFolder: () => Promise<{folder: string; files: {name: string; base64: string}[]}>;}}}
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
 const grid = $('grid'), empty = $('empty'), statusEl = $('status'), statusText = $('statusText');
 const nowTitle = $('nowTitle'), nowArtist = $('nowArtist'), meterFill = $('meterFill'), pct = $('pct');
 const output = $<HTMLSelectElement>('output'), muteBtn = $<HTMLButtonElement>('btnMute');
 const fileInput = $<HTMLInputElement>('fileInput'), folderInput = $<HTMLInputElement>('folderInput');
+const palets = $('palets'), paletTitle = $('paletTitle');
+interface Palette {id: string; name: string}
+let palettes: Palette[] = [], curPalette = 'utama';
 
 let cards: Runtime[] = [];
 let active = -1, level = 0, muted = false, raf = 0, pausedCard = -1, dragSeek: number | null = null;
@@ -34,14 +37,26 @@ function setSlider(c: Runtime, v: number): void {
   c.el.querySelector('.volNum')!.textContent = val + '%';
 }
 function persist(c: Runtime): void {
-  void putCard({id: c.id, name: c.name, blob: c.blob, vol: c.vol, fout: c.fout, fin: c.fin, playedMs: c.playedMs || 0}).catch(() => {});
+  void putCard({id: c.id, name: c.name, blob: c.blob, vol: c.vol, fout: c.fout, fin: c.fin, playedMs: c.playedMs || 0, paletteId: c.paletteId}).catch(() => {});
 }
 function formatMs(ms: number): string {
   const s = Math.floor(Math.max(0, ms) / 1000);
   return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
 }
+function loadOrder(): string[] {return JSON.parse(localStorage.getItem('suara-cue-order') || '[]')}
 function saveOrder(): void {
   localStorage.setItem('suara-cue-order', JSON.stringify(cards.map(c => c.id)));
+}
+function savePalettes(): void {localStorage.setItem('suara-cue-palettes', JSON.stringify(palettes))}
+function visibleCards(): Runtime[] {return cards.filter(c => c.paletteId === curPalette)}
+function ensurePalette(name: string): string {
+  const found = palettes.find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (found) return found.id;
+  const p = {id: crypto.randomUUID(), name};
+  palettes.push(p); savePalettes(); return p.id;
+}
+function switchPalette(id: string): void {
+  curPalette = id; localStorage.setItem('suara-cue-cur', id); render();
 }
 function applyLevel(): void {
   if (active >= 0) setLevel(cards[active].audio, muted ? 0 : level);
@@ -49,20 +64,36 @@ function applyLevel(): void {
 function cancelRaf(): void {if (raf) cancelAnimationFrame(raf); raf = 0;}
 
 function render(): void {
-  const order: string[] = JSON.parse(localStorage.getItem('suara-cue-order') || '[]');
+  const order = loadOrder();
   cards.sort((a, b) => {
     const ia = order.indexOf(a.id), ib = order.indexOf(b.id);
     return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
   });
   saveOrder();
+  palets.innerHTML = '';
+  palettes.forEach(p => {
+    const b = document.createElement('button');
+    b.className = 'palet' + (p.id === curPalette ? ' on' : '');
+    const live = active >= 0 && cards[active]?.paletteId === p.id;
+    b.innerHTML = (live ? '<span class="live-dot"></span>' : '') + p.name;
+    b.onclick = () => switchPalette(p.id);
+    palets.appendChild(b);
+  });
+  const add = document.createElement('button');
+  add.className = 'palet new'; add.textContent = '+ PALET';
+  add.onclick = () => {const id = ensurePalette('PALET ' + (palettes.length + 1)); switchPalette(id);};
+  palets.appendChild(add);
+  paletTitle.textContent = 'Papan Lagu — ' + (palettes.find(p => p.id === curPalette)?.name || '');
+  const vis = visibleCards();
   grid.innerHTML = '';
-  empty.style.display = cards.length ? 'none' : 'flex';
-  cards.forEach((c, i) => {
+  empty.style.display = vis.length ? 'none' : 'flex';
+  vis.forEach((c, vi) => {
+    const i = cards.indexOf(c);
     const art = document.createElement('article');
     art.className = 'card';
     art.dataset.i = String(i);
     art.innerHTML = `
-      <div class="card-top"><span class="num">${String(i + 1).padStart(2, '0')}</span>
+      <div class="card-top"><span class="num">${String(vi + 1).padStart(2, '0')}</span>
         <span class="badge">${c.name.toLowerCase().endsWith('.wav') ? 'WAV' : 'AUDIO'}</span>
         <span class="dur">${c.durationMs ? formatMs(c.durationMs) : '--:--'}</span>
         <button class="mv" data-move-left="${i}" aria-label="Geser kiri" title="Geser kiri">‹</button><button class="mv" data-move-right="${i}" aria-label="Geser kanan" title="Geser kanan">›</button>
@@ -74,12 +105,12 @@ function render(): void {
       <div class="seek" data-seek="${i}" role="slider" aria-label="Posisi lagu ${c.name}"><div class="seek-fill"></div></div>
       <div class="volhead"><span>VOLUME KARTU</span><b class="volNum">${c.vol}%</b></div>
       <div class="vrange"><input type="range" data-vol min="0" max="100" step="1" value="${c.vol}" aria-label="Volume ${c.name}"></div>
-      <div class="fade-set">
+      <div class="durbox"><div class="cap">FADE — TERPISAH DARI VOLUME</div><div class="durrow">
         <label>KELUAR <input class="fout" type="number" min="0" max="30" step="0.5" value="${c.fout}" aria-label="Detik keluar ${c.name}">s</label>
         <label>MASUK <input class="fin" type="number" min="0" max="30" step="0.5" value="${c.fin}" aria-label="Detik masuk ${c.name}">s</label>
-      </div>
+      </div></div>
       <div class="card-foot"><span class="card-state">SIAP</span>
-        <button class="play" data-play="${i}"><span class="lab">PUTAR</span><kbd>${i + 1}</kbd></button>
+        <button class="play" data-play="${i}"><span class="lab">PUTAR</span><kbd>${vi + 1}</kbd></button>
         <button class="stop" data-stop="${i}" title="Stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
       </div><div class="level"><span></span></div>`;
     c.el = art;
@@ -90,6 +121,7 @@ function render(): void {
 
 function updateUI(): void {
   cards.forEach((c, i) => {
+    if (!c.el.querySelector('.lab')) return;
     const on = i === active;
     c.el.classList.toggle('onair', on && level > 0);
     c.el.classList.toggle('silent', on && level <= 0);
@@ -108,7 +140,7 @@ function updateUI(): void {
   nowArtist.textContent = c
     ? (fading === 'out' ? 'hitung mundur ' + fadeLeft.toFixed(1) + 's · ' + Math.round(level) + '%'
       : fading === 'in' ? 'naik ke ' + c.vol + '% · ' + Math.round(level) + '%'
-      : 'volume kartu ' + c.vol + '%')
+      : (palettes.find(p => p.id === c.paletteId)?.name || '') + ' · volume ' + c.vol + '%')
     : 'pilih kartu untuk memulai';
   meterFill.style.width = (muted ? 0 : level) + '%';
   pct.textContent = Math.round(muted ? 0 : level) + '%';
@@ -206,20 +238,22 @@ function makeRuntime(s: StoredCard): Runtime {
   return c;
 }
 const AUDIO_RE = /\.(mp3|m4a|aac|ogg|opus|flac|wav)$/i;
-async function addFiles(files: File[]): Promise<void> {
+async function addFiles(files: File[], paletteId?: string): Promise<void> {
+  const pid = paletteId || curPalette;
   for (const f of files.filter(f => AUDIO_RE.test(f.name) || f.type.startsWith('audio/'))) {
-    const s: StoredCard = {id: crypto.randomUUID(), name: f.name, blob: f, vol: 80, fout: 3, fin: 0};
+    const s: StoredCard = {id: crypto.randomUUID(), name: f.name, blob: f, vol: 80, fout: 3, fin: 0, paletteId: pid};
     cards.push(makeRuntime(s));
     await putCard(s);
   }
   render();
 }
 function move(i: number, dir: number): void {
-  const j = i + dir;
-  if (i < 0 || j < 0 || j >= cards.length) return;
+  const vis = visibleCards(), vi = vis.findIndex(c => c.id === cards[i]?.id);
+  if (vi < 0 || vi + dir < 0 || vi + dir >= vis.length) return;
   if (active >= 0) finishStop();
-  [cards[i], cards[j]] = [cards[j], cards[i]];
-  saveOrder();
+  const a = vis[vi].id, b = vis[vi + dir].id;
+  const order = loadOrder(), ia = order.indexOf(a), ib = order.indexOf(b);
+  if (ia >= 0 && ib >= 0) {[order[ia], order[ib]] = [order[ib], order[ia]]; localStorage.setItem('suara-cue-order', JSON.stringify(order));}
   render();
 }
 async function removeCard(i: number): Promise<void> {
@@ -297,12 +331,19 @@ fileInput.addEventListener('change', () => {void addFiles([...fileInput.files!])
 $('folderBtn').addEventListener('click', async () => {
   if (window.electronAPI?.openFolder) {
     const picked = await window.electronAPI.openFolder();
-    await addFiles(picked.map(p => new File([Uint8Array.from(atob(p.base64), ch => ch.charCodeAt(0))], p.name, {type: 'audio/*'})));
+    if (!picked.files.length) return;
+    const pid = ensurePalette(picked.folder || 'FOLDER');
+    switchPalette(pid);
+    await addFiles(picked.files.map(p => new File([Uint8Array.from(atob(p.base64), ch => ch.charCodeAt(0))], p.name, {type: 'audio/*'})), pid);
   } else if ('webkitdirectory' in folderInput) folderInput.click();
   else $('addBtn').click();
 });
 folderInput.addEventListener('change', () => {
-  void addFiles([...folderInput.files!].sort((a, b) => a.webkitRelativePath.localeCompare(b.webkitRelativePath)));
+  const files = [...folderInput.files!].sort((a, b) => a.webkitRelativePath.localeCompare(b.webkitRelativePath));
+  const folder = files[0]?.webkitRelativePath.split('/')[0] || 'FOLDER';
+  const pid = ensurePalette(folder);
+  switchPalette(pid);
+  void addFiles(files, pid);
   folderInput.value = '';
 });
 output.addEventListener('change', () => {
@@ -315,7 +356,7 @@ $('btnStop').addEventListener('click', stop);
 muteBtn.addEventListener('click', () => {muted = !muted; applyLevel(); updateUI();});
 document.addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
-  if (/^[1-8]$/.test(e.key)) play(Number(e.key) - 1);
+  if (/^[1-8]$/.test(e.key)) {const vc = visibleCards()[Number(e.key) - 1]; if (vc) play(cards.indexOf(vc));}
   else if (e.key === 'ArrowDown') stepVolume(-5);
   else if (e.key === 'ArrowUp') stepVolume(5);
   else if (e.key.toLowerCase() === 'x') stop();
@@ -337,7 +378,17 @@ setInterval(() => {
   lastTick = now;
 }, 250);
 void (async () => {
+  const savedPalettes: Palette[] = JSON.parse(localStorage.getItem('suara-cue-palettes') || '[]');
+  palettes = savedPalettes.length ? savedPalettes : [{id: 'utama', name: 'UTAMA'}];
+  const savedCur = localStorage.getItem('suara-cue-cur');
+  curPalette = savedCur && palettes.some(p => p.id === savedCur) ? savedCur : palettes[0].id;
   const stored = await loadCards();
+  for (const s of stored) {
+    if (!s.paletteId || !palettes.some(p => p.id === s.paletteId)) {
+      s.paletteId = palettes[0].id;
+      void putCard(s);
+    }
+  }
   cards = stored.map(makeRuntime);
   render();
   await initDevices();
