@@ -130,7 +130,7 @@ function updateUI(): void {
         : fading === 'out' ? 'HITUNG MUNDUR ' + fadeLeft.toFixed(1) + 's'
         : fading === 'in' ? 'FADE MASUK ' + fadeLeft.toFixed(1) + 's'
         : level <= 0 ? 'VOLUME 0%' : c.loop ? 'ON AIR ↻' : 'ON AIR')
-      : 'SIAP';
+      : c.loop ? 'SIAP ↻' : 'SIAP';
     (c.el.querySelector('.level span') as HTMLElement).style.width = (on ? level : 0) + '%';
     setSlider(c, on ? level : c.vol);
   });
@@ -234,13 +234,14 @@ function makeRuntime(s: StoredCard): Runtime {
   audio.addEventListener('loadedmetadata', () => {
     if (Number.isFinite(audio.duration)) {
       c.durationMs = audio.duration * 1000;
-      c.el.querySelector('.dur')!.textContent = formatMs(c.durationMs);
-      c.el.querySelector('.total')!.textContent = formatMs(c.durationMs);
+      const d = c.el.querySelector('.dur'), t = c.el.querySelector('.total');
+      if (d) d.textContent = formatMs(c.durationMs);
+      if (t) t.textContent = formatMs(c.durationMs);
     }
   });
   audio.addEventListener('ended', () => {
     if (cards[active] !== c) return;
-    if (!c.loop) {finishStop(); return;}
+    if (!c.loop) {if (fading === 'out') pauseHere(); else finishStop(); return;}
     c.audio.currentTime = 0;
     void c.audio.play().catch(() => {});
     const fin = numSec(c.fin);
