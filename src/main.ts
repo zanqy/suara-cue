@@ -19,6 +19,14 @@ let active = -1, level = 0, muted = false, raf = 0, pausedCard = -1, dragSeek: n
 let fading: 'out' | 'in' | null = null, fadeLeft = 0;
 let lastTick = Date.now(), lastSave = 0;
 
+const lockBtn = $<HTMLButtonElement>('lockBtn'), lockLabel = $('lockLabel');
+const hint = $('hint'), countdown = $('countdown'), insertLine = $('insertLine'), toast = $('toast');
+let unlocked = false, holdTimer = 0, lockTimer = 0, remain = 8;
+let warmTimer = 0, warmingCard: HTMLElement | null = null, warmX = 0, warmY = 0;
+let reordering = false, ghost: HTMLElement | null = null;
+let rStartX = 0, rStartY = 0, rPointerX = 0, rPointerY = 0;
+let lastTarget: HTMLElement | null = null, dropTarget: HTMLElement | null = null, scrollRAF = 0;
+
 function seedOf(id: string): number {
   let h = 0;
   for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) & 0x7fffffff;
@@ -33,7 +41,7 @@ function setSlider(c: Runtime, v: number): void {
   const val = Math.round(Math.max(0, Math.min(100, v)));
   const input = c.el.querySelector<HTMLInputElement>('input[data-vol]')!;
   input.value = String(val);
-  input.style.setProperty('--track', `linear-gradient(90deg,#FF7654 ${val}%,#2A332A ${val}%)`);
+  input.style.setProperty('--track', `linear-gradient(90deg,var(--coral) ${val}%,var(--track) ${val}%)`);
   c.el.querySelector('.volNum')!.textContent = val + '%';
 }
 function persist(c: Runtime): void {
@@ -62,6 +70,123 @@ function applyLevel(): void {
   if (active >= 0) setLevel(cards[active].audio, muted ? 0 : level);
 }
 function cancelRaf(): void {if (raf) cancelAnimationFrame(raf); raf = 0;}
+
+function flashToast(): void {
+  toast.classList.add('show');
+  window.setTimeout(() => toast.classList.remove('show'), 1600);
+}
+function startCount(): void {
+  clearInterval(lockTimer);
+  if (!unlocked || warmingCard || reordering) return;
+  lockTimer = window.setInterval(() => {
+    if (warmingCard || reordering) return;
+    remain--; countdown.textContent = remain + 's';
+    if (remain <= 0) setLock(false);
+  }, 1000);
+}
+function setLock(state: boolean): void {
+  if (state === unlocked) return;
+  unlocked = state;
+  document.body.classList.toggle('unlocked', unlocked);
+  lockLabel.textContent = unlocked ? 'TERBUKA' : 'KUNCI';
+  clearInterval(lockTimer);
+  if (unlocked) {remain = 8; countdown.textContent = remain + 's'; startCount();}
+  else flashToast();
+}
+function cancelWarm(): void {
+  clearTimeout(warmTimer); warmTimer = 0;
+  if (warmingCard) warmingCard.classList.remove('warming');
+  warmingCard = null;
+  if (unlocked) {remain = 8; countdown.textContent = remain + 's'; startCount();}
+}
+function beginReorder(card: HTMLElement, e: PointerEvent): void {
+  reordering = true;
+  card.classList.remove('warming');
+  card.classList.add('source');
+  const r = card.getBoundingClientRect();
+  ghost = card.cloneNode(true) as HTMLElement;
+  ghost.className = 'card ghost';
+  ghost.style.width = r.width + 'px'; ghost.style.height = r.height + 'px';
+  ghost.style.left = r.left + 'px'; ghost.style.top = r.top + 'px';
+  document.body.appendChild(ghost);
+  document.body.style.touchAction = 'none';
+  document.body.classList.add('drag-active');
+  rStartX = e.clientX; rStartY = e.clientY; rPointerX = e.clientX; rPointerY = e.clientY;
+  scrollRAF = requestAnimationFrame(autoScroll);
+  clearInterval(lockTimer); countdown.textContent = '—';
+}
+function updateTargetAt(x: number, y: number): void {
+  const stack = document.elementsFromPoint(x, y);
+  const target = stack.map(el => (el as HTMLElement).closest('.card') as HTMLElement | null)
+    .find(c => c && !c.classList.contains('source') && !c.classList.contains('ghost')) || null;
+  if (lastTarget && lastTarget !== target) lastTarget.classList.remove('slot');
+  dropTarget = target;
+  if (target) {
+    target.classList.add('slot'); lastTarget = target;
+    const r = target.getBoundingClientRect();
+    insertLine.style.display = 'block';
+    insertLine.style.left = (x < r.left + r.width / 2 ? r.left - 4 : r.right) + 'px';
+    insertLine.style.top = r.top + 'px'; insertLine.style.height = r.height + 'px';
+  } else insertLine.style.display = 'none';
+}
+function autoScroll(): void {
+  if (!reordering) {scrollRAF = 0; return;}
+  const zone = 90, max = 15; let dy = 0;
+  if (rPointerY < zone) dy = -max * (1 - Math.max(0, rPointerY) / zone);
+  else if (rPointerY > innerHeight - zone) dy = max * (1 - Math.max(0, innerHeight - rPointerY) / zone);
+  if (dy) {window.scrollBy(0, dy); updateTargetAt(rPointerX, rPointerY);}
+  scrollRAF = requestAnimationFrame(autoScroll);
+}
+function commitReorder(source: HTMLElement, target: HTMLElement): void {
+  const before = new Map<HTMLElement, DOMRect>();
+  [...grid.children].forEach(el => before.set(el as HTMLElement, (el as HTMLElement).getBoundingClientRect()));
+  const vis = visibleCards();
+  const si = vis.findIndex(c => c.el === source), ti = vis.findIndex(c => c.el === target);
+  if (si < 0 || ti < 0 || si === ti) return;
+  const from = cards.indexOf(vis[si]), to = cards.indexOf(vis[ti]);
+  if (from < 0 || to < 0) return;
+  const [item] = cards.splice(from, 1);
+  cards.splice(to, 0, item);
+  const remap = (idx: number): number => {
+    if (idx === from) return to;
+    if (from < idx && idx <= to) return idx - 1;
+    if (to <= idx && idx < from) return idx + 1;
+    return idx;
+  };
+  if (active >= 0) active = remap(active);
+  if (pausedCard >= 0) pausedCard = remap(pausedCard);
+  saveOrder();
+  const posS = [...grid.children].indexOf(source), posT = [...grid.children].indexOf(target);
+  grid.insertBefore(source, posT > posS ? target.nextSibling : target);
+  [...grid.children].forEach((el, vi) => {
+    const rt = cards.find(c => c.el === el);
+    if (rt) (el as HTMLElement).dataset.i = String(cards.indexOf(rt));
+    el.querySelector('.num')!.textContent = String(vi + 1).padStart(2, '0');
+    el.querySelector('.play kbd')!.textContent = String(vi + 1);
+  });
+  for (const el of [...grid.children] as HTMLElement[]) {
+    const old = before.get(el); if (!old) continue;
+    const now = el.getBoundingClientRect(), dx = old.left - now.left, dy = old.top - now.top;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    el.style.transition = 'none'; el.style.transform = `translate(${dx}px, ${dy}px)`;
+    requestAnimationFrame(() => {el.style.transition = 'transform .28s cubic-bezier(.2,.85,.25,1)'; el.style.transform = '';});
+  }
+  updateUI();
+}
+function endReorder(): void {
+  cancelWarm();
+  if (!reordering) return;
+  cancelAnimationFrame(scrollRAF); scrollRAF = 0;
+  const moved = grid.querySelector('.card.source') as HTMLElement | null, dest = dropTarget;
+  if (ghost) {ghost.remove(); ghost = null;}
+  insertLine.style.display = 'none';
+  document.body.style.touchAction = ''; document.body.classList.remove('drag-active');
+  if (lastTarget) {lastTarget.classList.remove('slot'); lastTarget = null;}
+  if (dest && moved && dest !== moved) commitReorder(moved, dest);
+  if (moved) {moved.classList.remove('source'); moved.classList.add('settled'); window.setTimeout(() => moved.classList.remove('settled'), 520);}
+  reordering = false; dropTarget = null;
+  if (unlocked) {remain = 8; countdown.textContent = remain + 's'; startCount();}
+}
 
 function render(): void {
   const order = loadOrder();
@@ -93,7 +218,7 @@ function render(): void {
     art.className = 'card';
     art.dataset.i = String(i);
     art.innerHTML = `
-      <div class="card-top"><span class="num">${String(vi + 1).padStart(2, '0')}</span>
+      <div class="card-top"><span class="grip" aria-hidden="true">⠿</span><span class="num">${String(vi + 1).padStart(2, '0')}</span>
         <span class="badge">${c.name.toLowerCase().endsWith('.wav') ? 'WAV' : 'AUDIO'}</span>
         <span class="dur">${c.durationMs ? formatMs(c.durationMs) : '--:--'}</span>
         <button class="mv" data-move-left="${i}" aria-label="Geser kiri" title="Geser kiri">‹</button><button class="mv" data-move-right="${i}" aria-label="Geser kanan" title="Geser kanan">›</button>
@@ -302,7 +427,21 @@ grid.addEventListener('click', e => {
   else if (t.closest('[data-remove]')) void removeCard(i);
 });
 grid.addEventListener('pointerdown', e => {
-  const bar = (e.target as HTMLElement).closest('.seek') as HTMLElement;
+  const t = e.target as HTMLElement;
+  if (unlocked && !reordering && !warmingCard && !t.closest('.seek') && !t.closest('input') && !t.closest('button')) {
+    const card = t.closest('.card') as HTMLElement | null;
+    if (card) {
+      warmingCard = card; warmX = e.clientX; warmY = e.clientY;
+      card.classList.add('warming');
+      clearInterval(lockTimer); countdown.textContent = '—';
+      warmTimer = window.setTimeout(() => {
+        card.classList.remove('warming'); warmingCard = null; beginReorder(card, e);
+      }, 300);
+      try {grid.setPointerCapture(e.pointerId);} catch { /* older WebView */ }
+      e.preventDefault(); return;
+    }
+  }
+  const bar = t.closest('.seek') as HTMLElement;
   if (!bar) return;
   const i = Number((bar.closest('.card') as HTMLElement).dataset.i);
   dragSeek = i;
@@ -310,14 +449,29 @@ grid.addEventListener('pointerdown', e => {
   seekTo(i, e.clientX);
   e.preventDefault();
 });
-grid.addEventListener('pointermove', e => {if (dragSeek !== null) seekTo(dragSeek, e.clientX);});
+grid.addEventListener('pointermove', e => {
+  if (warmingCard && !reordering) {
+    if (Math.hypot(e.clientX - warmX, e.clientY - warmY) > 12) cancelWarm();
+    return;
+  }
+  if (reordering && ghost) {
+    rPointerX = e.clientX; rPointerY = e.clientY;
+    ghost.style.transform = `translate(${e.clientX - rStartX}px, ${e.clientY - rStartY}px) scale(1.05) rotate(-1.2deg)`;
+    updateTargetAt(e.clientX, e.clientY);
+    e.preventDefault(); return;
+  }
+  if (dragSeek !== null) seekTo(dragSeek, e.clientX);
+});
 grid.addEventListener('pointerup', e => {
+  if (warmingCard || reordering) {endReorder(); return;}
   if (dragSeek === null) return;
   const bar = (e.target as HTMLElement).closest('.seek') as HTMLElement;
   try {if (bar?.hasPointerCapture(e.pointerId)) bar.releasePointerCapture(e.pointerId);} catch { /* ignore */ }
   dragSeek = null;
 });
-grid.addEventListener('pointercancel', () => {dragSeek = null;});
+window.addEventListener('pointerup', () => {if (warmingCard || reordering) endReorder();});
+grid.addEventListener('pointercancel', () => {if (warmingCard || reordering) endReorder(); dragSeek = null;});
+window.addEventListener('pointercancel', () => {if (warmingCard || reordering) endReorder();});
 grid.addEventListener('input', e => {
   const t = e.target as HTMLInputElement;
   const cardEl = t.closest('.card') as HTMLElement;
@@ -371,6 +525,53 @@ function toggleLoop(): void {
 }
 $('btnLoop').addEventListener('click', toggleLoop);
 muteBtn.addEventListener('click', () => {muted = !muted; applyLevel(); updateUI();});
+
+lockBtn.addEventListener('pointerdown', e => {
+  lockBtn.classList.add('holding');
+  holdTimer = window.setTimeout(() => {lockBtn.classList.remove('holding'); setLock(!unlocked);}, 850);
+  try {lockBtn.setPointerCapture(e.pointerId);} catch { /* older WebView */ }
+  e.preventDefault();
+});
+function cancelHold(): void {clearTimeout(holdTimer); holdTimer = 0; lockBtn.classList.remove('holding');}
+lockBtn.addEventListener('pointerup', cancelHold);
+lockBtn.addEventListener('pointercancel', cancelHold);
+
+const settingsBtn = $<HTMLButtonElement>('settingsBtn'), settingsPanel = $('settingsPanel'), segTheme = $('segTheme');
+let themeMode = 'dark';
+function applyTheme(): void {
+  const light = themeMode === 'light' || (themeMode === 'system' && matchMedia('(prefers-color-scheme: light)').matches);
+  document.body.classList.toggle('light', light);
+  segTheme.querySelectorAll('button').forEach(b => b.classList.toggle('active', (b as HTMLElement).dataset.theme === themeMode));
+  try {localStorage.setItem('suara-cue-theme', themeMode);} catch { /* storage blocked */ }
+  if (cards.length) updateUI();
+}
+function chooseTheme(mode: string): void {themeMode = mode; applyTheme();}
+const tp = new URLSearchParams(location.search);
+let savedTheme = 'dark';
+try {savedTheme = localStorage.getItem('suara-cue-theme') || 'dark';} catch { /* storage blocked */ }
+chooseTheme(['dark', 'light', 'system'].includes(tp.get('theme') || '') ? tp.get('theme')! : savedTheme);
+let lastSys = matchMedia('(prefers-color-scheme: light)').matches;
+setInterval(() => {
+  const now = matchMedia('(prefers-color-scheme: light)').matches;
+  if (now !== lastSys) {lastSys = now; if (themeMode === 'system') applyTheme();}
+}, 800);
+settingsBtn.addEventListener('click', e => {
+  const open = settingsPanel.classList.toggle('open');
+  settingsBtn.setAttribute('aria-expanded', String(open));
+  e.stopPropagation();
+});
+document.addEventListener('click', e => {
+  if (settingsPanel.classList.contains('open') && !settingsPanel.contains(e.target as Node) && e.target !== settingsBtn) {
+    settingsPanel.classList.remove('open'); settingsBtn.setAttribute('aria-expanded', 'false');
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {settingsPanel.classList.remove('open'); settingsBtn.setAttribute('aria-expanded', 'false');}
+});
+segTheme.addEventListener('click', e => {
+  const b = (e.target as HTMLElement).closest('button[data-theme]') as HTMLButtonElement | null;
+  if (b) chooseTheme(b.dataset.theme || 'dark');
+});
 document.addEventListener('keydown', e => {
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
   if (/^[1-8]$/.test(e.key)) {const vc = visibleCards()[Number(e.key) - 1]; if (vc) play(cards.indexOf(vc));}

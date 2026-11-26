@@ -13,12 +13,32 @@
 <header class="topbar">
   <div class="brand"><h1>Suara.</h1><span class="tag">CUE DESK</span></div>
   <div class="status" id="status" role="status" aria-live="polite"><span class="dot"></span><span id="statusText">SIAP</span></div>
+  <button class="lock-btn" id="lockBtn" aria-label="Tahan untuk membuka kunci kartu">
+    <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>
+    <span id="lockLabel">KUNCI</span><span class="bar"></span>
+  </button>
+  <div class="settings">
+    <button class="settings-btn" id="settingsBtn" aria-label="Buka setelan" aria-expanded="false">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9 7 7m10 10 2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1"/></svg> SETELAN
+    </button>
+    <div class="settings-panel" id="settingsPanel">
+      <div class="set-title">SETELAN CUE DESK</div>
+      <div class="set-label">MODE TAMPILAN</div>
+      <div class="seg" id="segTheme">
+        <button type="button" data-theme="dark">GELAP</button>
+        <button type="button" data-theme="light">TERANG</button>
+        <button type="button" data-theme="system">SISTEM</button>
+      </div>
+      <p class="set-note">Mode kartu: tahan tombol KUNCI di header untuk membuka posisi.</p>
+    </div>
+  </div>
   <div class="top-spacer"></div>
   <div class="output"><span>OUTPUT</span><select id="output" aria-label="Output audio"><option>Default</option></select></div>
   <div class="clock" id="clock">00:00:00</div>
 </header>
 <main>
   <div class="palets" id="palets"></div>
+  <div class="hint" id="hint">TAHAN KARTU SEBENTAR · GESER KE POSISI BARU · TEKAN KUNCI UNTUK MENGUNCI <b id="countdown">8s</b></div>
   <div class="sec-head">
     <h2 id="paletTitle">Papan Lagu</h2>
     <p>1–8 PILIH · ↑↓ VOLUME · X JEDA/LANJUT · L LOOP · M MUTE</p>
@@ -30,6 +50,9 @@
   <div class="empty" id="empty"><span>Belum ada lagu.</span><button id="emptyAdd">PILIH FILE AUDIO</button><small>MP3 · M4A · OGG · FLAC · WAV</small></div>
   <div class="grid" id="grid"></div>
 </main>
+<div class="scroll-zone top" aria-hidden="true"></div><div class="scroll-zone bot" aria-hidden="true"></div>
+<div class="insert-line" id="insertLine" aria-hidden="true"></div>
+<div class="toast" id="toast" role="status" aria-live="polite">POSISI TERKUNCI</div>
 <footer class="transport">
   <div class="now">
     <div class="lbl">ON AIR</div>
